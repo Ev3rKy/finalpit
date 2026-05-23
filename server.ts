@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import Database from "better-sqlite3";
 import { Pool } from "pg";
@@ -13,7 +12,7 @@ let pgPool: Pool | null = null;
 if (usePostgres) {
   pgPool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    ssl: { rejectUnauthorized: false }
   });
 } else {
   sqliteDb = new Database("hospital.db");
@@ -64,7 +63,7 @@ async function dbRun(sql: string, params: any[] = []) {
 }
 
 async function initDb() {
-  // Initialize Tables
+  // Keeps existing tables exactly as they are without re-creating them
   await dbExec(`
     CREATE TABLE IF NOT EXISTS wards (
       id TEXT PRIMARY KEY,
@@ -107,26 +106,10 @@ async function initDb() {
     );
   `);
 
-  // Seed Data if empty
+  // Seeds baseline layout values only if completely unpopulated
   const wardCount = await dbGet("SELECT COUNT(*) as count FROM wards") as { count: number | string };
   if (Number(wardCount.count) === 0) {
     await dbRun("INSERT INTO wards (id, name, type, capacity) VALUES (?, ?, ?, ?)", ["w1", "Nightingale", "General", 12]);
-    
-    const initialPatients = [
-      { id: 'p1', name: 'Robert Thompson', priority: 'high', note: 'Vital check in 15m', dob: '12-May-55', marital_status: 'Married', registered_at: '12-Jan-26', type: 'IN-PATIENT' },
-      { id: 'p2', name: 'Eliza Bennett', priority: 'medium', note: 'Pending discharge: 16:00', dob: '03-Jun-82', marital_status: 'Single', registered_at: '15-Feb-26', type: 'IN-PATIENT' },
-      { id: 'p3', name: 'Arthur Miller', priority: 'medium', note: 'Post-op recovery', dob: '22-Aug-48', marital_status: 'Married', registered_at: '20-Mar-26', type: 'IN-PATIENT' },
-      { id: 'p4', name: 'Samuel Clarke', priority: 'low', note: 'Standard Monitoring', dob: '10-Oct-70', marital_status: 'Divorced', registered_at: '05-Apr-26', type: 'IN-PATIENT' },
-      { id: 'p5', name: 'Linda Grey', priority: 'low', note: 'Medication administered', dob: '15-Dec-65', marital_status: 'Widowed', registered_at: '10-May-26', type: 'IN-PATIENT' },
-      { id: 'p6', name: 'James Wilson', priority: 'high', note: 'Oxygen levels monitoring', dob: '28-Feb-50', marital_status: 'Married', registered_at: '12-May-26', type: 'IN-PATIENT' },
-      { id: 'p7', name: 'Purple Rain', priority: 'high', note: 'Regular checkup', dob: '09-Sep-60', marital_status: 'Single', registered_at: '12-May-26', type: 'IN-PATIENT' },
-      { id: 'p8', name: 'Kwis Cabang', priority: 'medium', note: 'Outpatient consult', dob: '31-Aug-77', marital_status: 'Married', registered_at: '13-Jan-26', type: 'OUT-PATIENT' },
-      { id: 'p9', name: 'Christian Pausanos', priority: 'low', note: 'Stable', dob: '31-Mar-75', marital_status: 'Married', registered_at: '12-May-26', type: 'IN-PATIENT' },
-    ];
-
-    for (const p of initialPatients) {
-      await dbRun("INSERT INTO patients (id, name, priority, note, dob, marital_status, registered_at, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [p.id, p.name, p.priority, p.note, p.dob, p.marital_status, p.registered_at, p.type]);
-    }
 
     const staff = [
       { id: 's1', name: 'Sarah Jenkins', role: 'Charge Nurse', status: 'On Duty', avatar: 'https://images.unsplash.com/photo-1559839734-2b71f1536783?auto=format&fit=crop&q=80&w=100&h=100' },
@@ -149,15 +132,15 @@ async function initDb() {
     }
 
     const beds = [
-      { id: '1', label: '01', status: 'occupied', patient_id: 'p1' },
-      { id: '2', label: '02', status: 'occupied', patient_id: 'p2' },
+      { id: '1', label: '01', status: 'available', patient_id: null },
+      { id: '2', label: '02', status: 'available', patient_id: null },
       { id: '3', label: '03', status: 'available', patient_id: null },
       { id: '4', label: '04', status: 'cleaning', patient_id: null },
-      { id: '5', label: '05', status: 'occupied', patient_id: 'p3' },
-      { id: '6', label: '06', status: 'occupied', patient_id: 'p4' },
-      { id: '7', label: '07', status: 'occupied', patient_id: 'p5' },
+      { id: '5', label: '05', status: 'available', patient_id: null },
+      { id: '6', label: '06', status: 'available', patient_id: null },
+      { id: '7', label: '07', status: 'available', patient_id: null },
       { id: '8', label: '08', status: 'available', patient_id: null },
-      { id: '9', label: '09', status: 'occupied', patient_id: 'p6' },
+      { id: '9', label: '09', status: 'available', patient_id: null },
       { id: '10', label: '10', status: 'available', patient_id: null },
       { id: '11', label: '11', status: 'cleaning', patient_id: null },
       { id: '12', label: '12', status: 'available', patient_id: null },
@@ -173,14 +156,12 @@ async function startServer() {
   await initDb();
   
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
 
   app.use(cors());
   app.use(express.json());
 
   // API Routes
-  
-  // 1. Maintain Ward Details
   app.get("/api/ward", async (req, res) => {
     const ward = await dbGet("SELECT * FROM wards LIMIT 1");
     res.json(ward);
@@ -192,7 +173,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // 2. Manage Bed Allocation and Availability
   app.get("/api/beds", async (req, res) => {
     const beds = await dbAll(`
       SELECT b.*, p.name as patient_name, p.priority as patient_priority, p.note as patient_note
@@ -215,17 +195,14 @@ async function startServer() {
     res.json(formattedBeds);
   });
 
-  // 3. Update Bed Status (Cleaning, Available, etc.)
   app.patch("/api/beds/:id/status", async (req, res) => {
     const { status } = req.body;
     await dbRun("UPDATE beds SET status = ?, patient_id = CASE WHEN ? = 'occupied' THEN patient_id ELSE NULL END WHERE id = ?", [status, status, req.params.id]);
     res.json({ success: true });
   });
 
-  // 4. Assign Bed to Patient
   app.post("/api/beds/:id/assign", async (req, res) => {
     const { patientId } = req.body;
-    // Check if patient exists
     const patient = await dbGet("SELECT * FROM patients WHERE id = ?", [patientId]);
     if (!patient) return res.status(404).json({ error: "Patient not found" });
 
@@ -233,41 +210,30 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // 5. Patients Endpoints
+  // Fetching Patients directly from your active database records
   app.get("/api/patients", async (req, res) => {
     const patients = await dbAll("SELECT * FROM patients");
     res.json(patients);
   });
 
-  // 6. Staff Endpoints
   app.get("/api/staff", async (req, res) => {
     const staff = await dbAll("SELECT * FROM staff");
     res.json(staff);
   });
 
-  // 7. Notes Endpoints
   app.get("/api/notes", async (req, res) => {
     const notes = await dbAll("SELECT * FROM notes");
     res.json(notes);
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+  const distPath = path.join(process.cwd(), "dist");
+  app.use(express.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(Number(PORT), "0.0.0.0", () => {
+    console.log(`Server running safely on port ${PORT}`);
   });
 }
 
